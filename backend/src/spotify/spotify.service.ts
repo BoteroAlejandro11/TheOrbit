@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Artist, ArtistDocument } from '../artists/artists.schema';
+import { Artist, ArtistDocument } from '../map/artists.schema';
 
 /**
  * ──────────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,8 @@ export class SpotifyService implements OnModuleInit {
       try {
         seeded.push(await this.fetchAndSeedArtist(a.id));
       } catch (e) {
-        this.logger.warn(`Failed to seed ${a.name}: ${e.message}`);
+        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+        this.logger.warn(`Failed to seed ${a.name}: ${errorMessage}`);
       }
     }
     return seeded;

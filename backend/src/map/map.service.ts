@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Artist, ArtistDocument } from '../artists/artists.schema';
+import { Artist, ArtistDocument } from '../map/artists.schema';
 import { SpotifyService } from '../spotify/spotify.service';
 
 export interface BoundingBox {

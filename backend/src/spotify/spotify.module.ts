@@ -2,7 +2,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { SpotifyService } from './spotify.service';
-import { Artist, ArtistSchema } from '../artists/artists.schema';
+import { Artist, ArtistSchema } from '../map/artists.schema';
 
 @Module({
   imports: [MongooseModule.forFeature([{ name: Artist.name, schema: ArtistSchema }])],
