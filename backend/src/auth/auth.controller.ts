@@ -1,15 +1,26 @@
 import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  @Post('register')
+ @Post('register')
   @ApiOperation({ summary: 'Registro de nuevo usuario' })
+  @ApiBody({ 
+    schema: {
+      type: 'object',
+      properties: {
+        username: { type: 'string', example: 'JuanPablo' },
+        email: { type: 'string', example: 'test@test.com' },
+        password: { type: 'string', example: 'Password123' }
+      }
+    }
+  })
   register(
     @Body() body: { username: string; email: string; password: string },
   ) {

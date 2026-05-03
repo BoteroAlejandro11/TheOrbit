@@ -75,9 +75,8 @@ export class SpotifyService implements OnModuleInit {
     const clientSecret = this.config.get<string>('SPOTIFY_CLIENT_SECRET');
 
     if (!clientId || !clientSecret) {
-      this.logger.warn('SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET not set — skipping token fetch');
-      return;
-    }
+  throw new Error('SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not configured');
+}
 
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
@@ -103,13 +102,28 @@ export class SpotifyService implements OnModuleInit {
   }
 
   private async spotifyGet<T>(path: string): Promise<T> {
-    await this.ensureToken();
-    const res = await fetch(`https://api.spotify.com/v1${path}`, {
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    });
-    if (!res.ok) throw new Error(`Spotify API error ${res.status}: ${path}`);
-    return res.json() as Promise<T>;
+  await this.ensureToken();
+
+  const fullUrl = `https://api.spotify.com/v1${path}`;
+  this.logger.log(`→ GET ${fullUrl}`);
+  this.logger.log(`→ Token present: ${!!this.accessToken}, starts with: ${this.accessToken?.substring(0, 20)}...`);
+
+  const res = await fetch(fullUrl, {
+    headers: { Authorization: `Bearer ${this.accessToken}` },
+  });
+
+  this.logger.log(`← Status: ${res.status}`);
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    this.logger.error(`Spotify API Response Error: ${errorText}`);
+    this.logger.error(`Failed URL was: ${fullUrl}`);
+    this.logger.error(`Auth header was: Bearer ${this.accessToken?.substring(0, 20)}...`);
+    throw new Error(`Spotify API error ${res.status}: ${path} - Details: ${errorText}`);
   }
+
+  return res.json() as Promise<T>;
+}
 
   // ── Spatial Algorithm ────────────────────────────────────────────────────
 
@@ -169,36 +183,43 @@ export class SpotifyService implements OnModuleInit {
 
   /** Fetch a single Spotify artist by ID and upsert into MongoDB. */
   async fetchAndSeedArtist(spotifyId: string): Promise<ArtistDocument> {
-    const [artistData, topTracksData] = await Promise.all([
-      this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`),
-      this.spotifyGet<SpotifyTopTracks>(`/artists/${spotifyId}/top-tracks?market=US`),
-    ]);
+  const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
 
-    const { x, y } = this.computeCoordinates(artistData.popularity, artistData.genres);
-    const topTrack = topTracksData.tracks[0];
-
-    const doc = await this.artistModel.findOneAndUpdate(
-      { spotify_id: spotifyId },
-      {
-        spotify_id: spotifyId,
-        name: artistData.name,
-        profile_image: artistData.images[0]?.url ?? null,
-        genres: artistData.genres,
-        popularity: artistData.popularity,
-        followers: artistData.followers.total,
-        preview_url: topTrack?.preview_url ?? null,
-        top_track_name: topTrack?.name ?? null,
-        top_track_album_art: topTrack?.album?.images[0]?.url ?? null,
-        x,
-        y,
-        location: { type: 'Point', coordinates: [x, y] },
-      },
-      { upsert: true, new: true },
+  let topTrack: { id: string; name: string; preview_url: string | null; album: { images: { url: string }[] } } | null = null;
+  try {
+    const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
+      `/artists/${spotifyId}/top-tracks?market=US`
     );
-
-    this.logger.log(`Seeded artist: ${artistData.name} @ (${x}, ${y})`);
-    return doc;
+    topTrack = topTracksData.tracks?.[0] ?? null;
+  } catch (e) {
+    this.logger.warn(`Top tracks unavailable for ${artistData.name}, seeding without it`);
   }
+
+  const genres = artistData.genres ?? [];  // ← guard against undefined genres
+  const popularity = artistData.popularity ?? 50;
+const { x, y } = this.computeCoordinates(popularity, genres);
+
+  const doc = await this.artistModel.findOneAndUpdate(
+    { spotify_id: spotifyId },
+    {
+      spotify_id: spotifyId,
+      name: artistData.name,
+      profile_image: artistData.images?.[0]?.url ?? null,
+      genres,
+      popularity: artistData.popularity,
+      followers: artistData.followers?.total ?? 0,
+      preview_url: topTrack?.preview_url ?? null,
+      top_track_name: topTrack?.name ?? null,
+      top_track_album_art: topTrack?.album?.images?.[0]?.url ?? null,
+      x,
+      y,
+    },
+    { upsert: true, new: true },
+  );
+
+  this.logger.log(`Seeded artist: ${artistData.name} @ (${x}, ${y})`);
+  return doc;
+}
 
   /**
    * Seed a batch of popular artists to populate the map center.
@@ -215,24 +236,62 @@ export class SpotifyService implements OnModuleInit {
    * Search Spotify for artists by query and seed the results.
    * Useful for populating niche genres on demand.
    */
-  async searchAndSeed(query: string, limit = 20): Promise<ArtistDocument[]> {
-    const data = await this.spotifyGet<SpotifySearchResult>(
-      `/search?q=${encodeURIComponent(query)}&type=artist&limit=${limit}`,
-    );
-    const artists = data.artists.items;
-    const seeded: ArtistDocument[] = [];
-    for (const a of artists) {
-      try {
-        seeded.push(await this.fetchAndSeedArtist(a.id));
-      } catch (e) {
-        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-        this.logger.warn(`Failed to seed ${a.name}: ${errorMessage}`);
-      }
+  async searchAndSeed(query: any, limit: any = 20): Promise<ArtistDocument[]> {
+  // 1. Bulletproof Extraction
+  const searchTerm = typeof query === 'object' ? query.query : query;
+
+  // If limit is passed as part of an object, or is a raw value, extract it
+  const rawLimit = typeof query === 'object' && query.limit != null ? query.limit : limit;
+
+  // 2. Parse, clamp to Spotify's allowed range [1–50], fall back to 20
+  let cleanLimit = parseInt(String(rawLimit).trim(), 10);
+  if (isNaN(cleanLimit) || cleanLimit < 1) {
+    cleanLimit = 20;
+  } else if (cleanLimit > 50) {
+    cleanLimit = 50;
+  }
+
+    // 3. Validation
+    if (!searchTerm || typeof searchTerm !== 'string') {
+      this.logger.error(`Invalid search term received: ${JSON.stringify(query)}`);
+      throw new Error('The search query must be a non-empty string.');
     }
-    return seeded;
+
+    this.logger.log(`Searching Spotify for: "${searchTerm}" with limit: ${cleanLimit}`);
+
+    // 4. Construction
+    const url = `/search?q=${encodeURIComponent(searchTerm)}&type=artist&market=US`;
+
+    try {
+      const data = await this.spotifyGet<SpotifySearchResult>(url);
+      
+      if (!data.artists || !data.artists.items) {
+        this.logger.warn(`No artists found for query: "${searchTerm}"`);
+        return [];
+      }
+
+      const artists = data.artists.items;
+      const seeded: ArtistDocument[] = [];
+
+      for (const a of artists) {
+        try {
+          if (a.id) {
+            seeded.push(await this.fetchAndSeedArtist(a.id));
+          }
+        } catch (e) {
+          const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+          this.logger.warn(`Failed to seed ${a.name}: ${errorMessage}`);
+        }
+      }
+
+      return seeded;
+    } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Spotify Search Failed: ${errorMessage}`);
+      throw error;
+    }
   }
 }
-
 // ── Spotify API types (minimal surface) ──────────────────────────────────────
 
 interface SpotifyArtist {

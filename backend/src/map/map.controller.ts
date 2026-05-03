@@ -8,7 +8,7 @@ import {
   Post,
   Body,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { MapService } from './map.service';
 import { SpotifyService } from '../spotify/spotify.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -67,6 +67,24 @@ export class MapController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Seed artists from Spotify by genre/query' })
+  @ApiBody({ 
+    schema: {
+      type: 'object',
+      properties: {
+        query: { 
+          type: 'string', 
+          example: 'salsa', 
+          description: 'The genre or artist name to search for' 
+        },
+        limit: { 
+          type: 'number', 
+          example: 20, 
+          description: 'Number of artists to fetch (optional)' 
+        }
+      },
+      required: ['query']
+    }
+  })
   async seedArtists(@Body() body: { query: string; limit?: number }) {
     const artists = await this.spotifyService.searchAndSeed(body.query, body.limit ?? 20);
     return { seeded: artists.length, message: `Seeded ${artists.length} artists for query: "${body.query}"` };
