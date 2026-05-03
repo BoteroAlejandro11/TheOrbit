@@ -75,6 +75,9 @@ export class MapService {
     return artists as ArtistDocument[];
   }
 
+  async getArtistById(spotifyId: string): Promise<ArtistDocument | null> {
+  return this.artistModel.findOne({ spotify_id: spotifyId }).lean() as Promise<ArtistDocument | null>;
+}
   /** Get artists near a point, ordered by distance (for "zoom in" behavior). */
   async getArtistsNear(
     cx: number,

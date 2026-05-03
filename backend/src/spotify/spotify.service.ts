@@ -4,50 +4,34 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Artist, ArtistDocument } from '../map/artists.schema';
 
-/**
- * ──────────────────────────────────────────────────────────────────────────────
- * SpotifyService
- * ──────────────────────────────────────────────────────────────────────────────
- * Responsibilities:
- *  1. Obtain + refresh a Client Credentials access token (no user login needed).
- *  2. Fetch artist data from the Spotify Web API.
- *  3. Run the spatial algorithm to produce (x, y) canvas coordinates.
- *  4. Seed / upsert Artist documents into MongoDB.
- * ──────────────────────────────────────────────────────────────────────────────
- */
 @Injectable()
 export class SpotifyService implements OnModuleInit {
   private readonly logger = new Logger(SpotifyService.name);
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
 
-  // ── Genre → angle mapping ────────────────────────────────────────────────
-  // We bucket known genres into 12 "slices" (like a clock).
-  // Unknown genres are hashed deterministically.
-  private static readonly GENRE_ANGLES: Record<string, number> = {
-    pop: 0,
-    'dance pop': 0.2,
-    'electropop': 0.4,
-    electronic: Math.PI / 6,
-    edm: Math.PI / 5,
-    house: Math.PI / 4,
-    'hip hop': Math.PI / 3,
-    rap: Math.PI / 2.8,
-    'trap': Math.PI / 2.5,
-    'r&b': Math.PI / 2,
-    soul: Math.PI / 1.9,
-    jazz: Math.PI / 1.7,
-    classical: Math.PI,
-    metal: Math.PI * 1.2,
-    rock: Math.PI * 1.3,
-    'indie rock': Math.PI * 1.4,
-    alternative: Math.PI * 1.5,
-    folk: Math.PI * 1.6,
-    country: Math.PI * 1.7,
-    reggae: Math.PI * 1.8,
-    latin: Math.PI * 1.9,
-    'k-pop': Math.PI * 0.1,
-  };
+  private static computeGenreAngles(): Record<string, number> {
+  const genres = [
+    'pop', 'dance pop', 'k-pop', 'electropop',
+    'electronic', 'edm', 'house', 'techno',
+    'hip hop', 'rap', 'trap',
+    'r&b', 'soul', 'funk',
+    'jazz', 'blues',
+    'classical', 'ambient',
+    'folk', 'country', 'bluegrass',
+    'rock', 'indie rock', 'alternative', 'metal', 'punk',
+    'reggae', 'dancehall',
+    'latin', 'salsa', 'bachata', 'cumbia', 'reggaeton',
+  ];
+
+  const result: Record<string, number> = {};
+  genres.forEach((g, i) => {
+    result[g] = (i / genres.length) * 2 * Math.PI;
+  });
+  return result;
+}
+
+private static readonly GENRE_ANGLES = SpotifyService.computeGenreAngles();
 
   constructor(
     private readonly config: ConfigService,
@@ -55,28 +39,20 @@ export class SpotifyService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Pre-warm the token on startup
     await this.ensureToken();
   }
 
-  // ── Token management ──────────────────────────────────────────────────────
+  // ── Spotify Token ─────────────────────────────────────────────────────────
 
-  /**
-   * OAuth 2.0 Client Credentials Flow.
-   * The backend authenticates with its own Client ID + Secret.
-   * No user account or redirect is required.
-   */
   private async ensureToken(): Promise<void> {
-    if (this.accessToken && Date.now() < this.tokenExpiresAt - 60_000) {
-      return; // Token still valid
-    }
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - 60_000) return;
 
     const clientId = this.config.get<string>('SPOTIFY_CLIENT_ID');
     const clientSecret = this.config.get<string>('SPOTIFY_CLIENT_SECRET');
 
     if (!clientId || !clientSecret) {
-  throw new Error('SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not configured');
-}
+      throw new Error('SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not configured');
+    }
 
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
@@ -102,66 +78,98 @@ export class SpotifyService implements OnModuleInit {
   }
 
   private async spotifyGet<T>(path: string): Promise<T> {
-  await this.ensureToken();
+    await this.ensureToken();
+    const fullUrl = `https://api.spotify.com/v1${path}`;
+    const res = await fetch(fullUrl, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
 
-  const fullUrl = `https://api.spotify.com/v1${path}`;
-  this.logger.log(`→ GET ${fullUrl}`);
-  this.logger.log(`→ Token present: ${!!this.accessToken}, starts with: ${this.accessToken?.substring(0, 20)}...`);
+    if (!res.ok) {
+      const errorText = await res.text();
+      this.logger.error(`Spotify API error ${res.status}: ${errorText}`);
+      throw new Error(`Spotify API error ${res.status}: ${path}`);
+    }
 
-  const res = await fetch(fullUrl, {
-    headers: { Authorization: `Bearer ${this.accessToken}` },
-  });
-
-  this.logger.log(`← Status: ${res.status}`);
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    this.logger.error(`Spotify API Response Error: ${errorText}`);
-    this.logger.error(`Failed URL was: ${fullUrl}`);
-    this.logger.error(`Auth header was: Bearer ${this.accessToken?.substring(0, 20)}...`);
-    throw new Error(`Spotify API error ${res.status}: ${path} - Details: ${errorText}`);
+    return res.json() as Promise<T>;
   }
 
-  return res.json() as Promise<T>;
-}
+  // ── Last.fm ───────────────────────────────────────────────────────────────
 
-  // ── Spatial Algorithm ────────────────────────────────────────────────────
+  private async lastFmGetArtist(name: string): Promise<{ listeners: number; tags: string[] }> {
+    const apiKey = this.config.get<string>('LASTFM_API_KEY');
+    if (!apiKey) {
+      this.logger.warn('LASTFM_API_KEY not set');
+      return { listeners: 0, tags: [] };
+    }
 
-  /**
-   * Converts a Spotify artist's metadata into Cartesian (x, y) coordinates.
-   *
-   * RADIUS:  r = MAX_RADIUS * (1 - popularity/100)
-   *   - popularity 100 → r = 0   → center of the map (mainstream)
-   *   - popularity 0   → r = MAX → periphery (niche/undiscovered)
-   *
-   * ANGLE:   θ = weighted average of known genre angles (or a hash for unknown)
-   *   - Each genre contributes its mapped angle weighted by 1/rank
-   *   - This keeps similar genres in the same angular sector
-   *
-   * RESULT:  x = r * cos(θ),  y = r * sin(θ)
-   */
-  computeCoordinates(popularity: number, genres: string[]): { x: number; y: number } {
-    const MAX_RADIUS = 500; // canvas units; frontend maps this to viewport pixels
+    try {
+      const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${encodeURIComponent(name)}&api_key=${apiKey}&format=json`;
+      const res = await fetch(url);
 
-    const r = MAX_RADIUS * (1 - popularity / 100);
+      if (!res.ok) {
+        this.logger.warn(`Last.fm request failed for ${name}: ${res.status}`);
+        return { listeners: 0, tags: [] };
+      }
 
-    // Genre → angle
-    let theta = 0;
-    if (genres.length === 0) {
-      theta = Math.random() * 2 * Math.PI; // completely unknown → random quadrant
+      const data = await res.json() as LastFmArtistResponse;
+
+      if (!data.artist) {
+        this.logger.warn(`Last.fm: no data found for "${name}"`);
+        return { listeners: 0, tags: [] };
+      }
+
+      const listeners = parseInt(data.artist.stats?.listeners ?? '0', 10);
+      const tags = data.artist.tags?.tag?.map((t) => t.name.toLowerCase()) ?? [];
+
+      this.logger.log(`Last.fm - ${name}: listeners=${listeners}, tags=${tags.join(', ') || 'none'}`);
+      return { listeners, tags };
+    } catch (e) {
+      this.logger.warn(`Last.fm fetch failed for ${name}: ${e}`);
+      return { listeners: 0, tags: [] };
+    }
+  }
+
+  // ── Spatial Algorithm ─────────────────────────────────────────────────────
+
+  computeCoordinates(genres: string[], seed: string, listeners: number): { x: number; y: number } {
+    const MAX_RADIUS = 1200;
+
+    let r: number;
+    let theta: number;
+
+    if (listeners > 0) {
+      const maxLog = Math.log10(100_000_000);
+      const logListeners = Math.log10(Math.max(listeners, 1));
+      const normalized = Math.min(logListeners / maxLog, 1);
+      const MIN_RADIUS = 200; // was 150
+r = MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (1 - normalized);
     } else {
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) {
+        hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+      }
+      const hashNorm = (hash % 10000) / 10000;
+      r = MAX_RADIUS * 0.3 + hashNorm * MAX_RADIUS * 0.6;
+    }
+
+    if (genres.length > 0) {
       let totalWeight = 0;
       let weightedAngle = 0;
-
       genres.forEach((genre, i) => {
-        const weight = 1 / (i + 1); // first genre is most important
-        const angle = SpotifyService.GENRE_ANGLES[genre.toLowerCase()]
-          ?? this.hashGenreToAngle(genre);
+        const weight = 1 / (i + 1);
+        const angle =
+          SpotifyService.GENRE_ANGLES[genre.toLowerCase()] ??
+          this.hashGenreToAngle(genre);
         weightedAngle += angle * weight;
         totalWeight += weight;
       });
-
       theta = weightedAngle / totalWeight;
+    } else {
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) {
+        hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+      }
+      theta = ((hash % 1000) / 1000) * 2 * Math.PI;
     }
 
     return {
@@ -170,88 +178,87 @@ export class SpotifyService implements OnModuleInit {
     };
   }
 
-  /** Deterministic hash → [0, 2π] for genres not in the lookup table. */
   private hashGenreToAngle(genre: string): number {
     let hash = 0;
     for (let i = 0; i < genre.length; i++) {
       hash = (hash * 31 + genre.charCodeAt(i)) >>> 0;
     }
-    return (hash % 1000) / 1000 * 2 * Math.PI;
+    return ((hash % 1000) / 1000) * 2 * Math.PI;
   }
 
-  // ── Data Fetching & Seeding ───────────────────────────────────────────────
+  // ── Seeding ───────────────────────────────────────────────────────────────
 
-  /** Fetch a single Spotify artist by ID and upsert into MongoDB. */
-  async fetchAndSeedArtist(spotifyId: string): Promise<ArtistDocument> {
-  const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
+  async fetchAndSeedArtist(spotifyId: string, artistName?: string): Promise<ArtistDocument> {
+    const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
+    const name = artistData.name ?? artistName ?? 'Unknown';
 
-  let topTrack: { id: string; name: string; preview_url: string | null; album: { images: { url: string }[] } } | null = null;
-  try {
-    const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
-      `/artists/${spotifyId}/top-tracks?market=US`
-    );
-    topTrack = topTracksData.tracks?.[0] ?? null;
-  } catch (e) {
-    this.logger.warn(`Top tracks unavailable for ${artistData.name}, seeding without it`);
-  }
+    // Get rich metadata from Last.fm
+    const { listeners, tags } = await this.lastFmGetArtist(name);
 
-  const genres = artistData.genres ?? [];  // ← guard against undefined genres
-  const popularity = artistData.popularity ?? 50;
-const { x, y } = this.computeCoordinates(popularity, genres);
+    const genres = tags.length > 0 ? tags : [];
+    const { x, y } = this.computeCoordinates(genres, spotifyId, listeners);
 
-  const doc = await this.artistModel.findOneAndUpdate(
-    { spotify_id: spotifyId },
-    {
-      spotify_id: spotifyId,
-      name: artistData.name,
-      profile_image: artistData.images?.[0]?.url ?? null,
-      genres,
-      popularity: artistData.popularity,
-      followers: artistData.followers?.total ?? 0,
-      preview_url: topTrack?.preview_url ?? null,
-      top_track_name: topTrack?.name ?? null,
-      top_track_album_art: topTrack?.album?.images?.[0]?.url ?? null,
-      x,
-      y,
-    },
-    { upsert: true, new: true },
+    let topTracks: {
+  id: string;
+  name: string;
+  preview_url: string | null;
+  album_art: string;
+  album_name: string;
+}[] = [];
+
+try {
+  const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
+    `/artists/${spotifyId}/top-tracks?market=US`,
   );
-
-  this.logger.log(`Seeded artist: ${artistData.name} @ (${x}, ${y})`);
-  return doc;
+  topTracks = (topTracksData.tracks ?? []).slice(0, 10).map((t) => ({
+    id: t.id,
+    name: t.name,
+    preview_url: t.preview_url ?? null,
+    album_art: t.album?.images?.[0]?.url ?? '',
+    album_name: t.album?.name ?? '',
+  }));
+} catch (e) {
+  this.logger.warn(`Top tracks unavailable for ${name}`);
 }
 
-  /**
-   * Seed a batch of popular artists to populate the map center.
-   * Call this once on first setup (or via a cron job).
-   */
+    const doc = await this.artistModel.findOneAndUpdate(
+  { spotify_id: spotifyId },
+  {
+    spotify_id: spotifyId,
+    name,
+    profile_image: artistData.images?.[0]?.url ?? null,
+    genres,
+    popularity: artistData.popularity ?? 0,
+    followers: listeners,
+    preview_url: topTracks[0]?.preview_url ?? null,
+    top_track_name: topTracks[0]?.name ?? null,
+    top_track_album_art: topTracks[0]?.album_art ?? null,
+    topTracks,
+    x,
+    y,
+  },
+  { upsert: true, new: true },
+);
+
+    this.logger.log(`Seeded: ${name} | listeners=${listeners} | genres=${genres.slice(0, 3).join(', ') || 'none'} | pos=(${x}, ${y})`);
+    return doc;
+  }
+
   async seedPopularArtists(ids: string[]): Promise<void> {
     this.logger.log(`Seeding ${ids.length} artists...`);
-    const results = await Promise.allSettled(ids.map(id => this.fetchAndSeedArtist(id)));
-    const failed = results.filter(r => r.status === 'rejected').length;
+    const results = await Promise.allSettled(ids.map((id) => this.fetchAndSeedArtist(id)));
+    const failed = results.filter((r) => r.status === 'rejected').length;
     this.logger.log(`Seeding complete. Success: ${ids.length - failed}, Failed: ${failed}`);
   }
 
-  /**
-   * Search Spotify for artists by query and seed the results.
-   * Useful for populating niche genres on demand.
-   */
   async searchAndSeed(query: any, limit: any = 20): Promise<ArtistDocument[]> {
-  // 1. Bulletproof Extraction
-  const searchTerm = typeof query === 'object' ? query.query : query;
+    const searchTerm = typeof query === 'object' ? query.query : query;
+    const rawLimit = typeof query === 'object' && query.limit != null ? query.limit : limit;
 
-  // If limit is passed as part of an object, or is a raw value, extract it
-  const rawLimit = typeof query === 'object' && query.limit != null ? query.limit : limit;
+    let cleanLimit = parseInt(String(rawLimit).trim(), 10);
+    if (isNaN(cleanLimit) || cleanLimit < 1) cleanLimit = 20;
+    else if (cleanLimit > 50) cleanLimit = 50;
 
-  // 2. Parse, clamp to Spotify's allowed range [1–50], fall back to 20
-  let cleanLimit = parseInt(String(rawLimit).trim(), 10);
-  if (isNaN(cleanLimit) || cleanLimit < 1) {
-    cleanLimit = 20;
-  } else if (cleanLimit > 50) {
-    cleanLimit = 50;
-  }
-
-    // 3. Validation
     if (!searchTerm || typeof searchTerm !== 'string') {
       this.logger.error(`Invalid search term received: ${JSON.stringify(query)}`);
       throw new Error('The search query must be a non-empty string.');
@@ -259,24 +266,22 @@ const { x, y } = this.computeCoordinates(popularity, genres);
 
     this.logger.log(`Searching Spotify for: "${searchTerm}" with limit: ${cleanLimit}`);
 
-    // 4. Construction
     const url = `/search?q=${encodeURIComponent(searchTerm)}&type=artist&market=US`;
 
     try {
       const data = await this.spotifyGet<SpotifySearchResult>(url);
-      
-      if (!data.artists || !data.artists.items) {
+
+      if (!data.artists?.items) {
         this.logger.warn(`No artists found for query: "${searchTerm}"`);
         return [];
       }
 
-      const artists = data.artists.items;
       const seeded: ArtistDocument[] = [];
 
-      for (const a of artists) {
+      for (const a of data.artists.items) {
         try {
           if (a.id) {
-            seeded.push(await this.fetchAndSeedArtist(a.id));
+            seeded.push(await this.fetchAndSeedArtist(a.id, a.name));
           }
         } catch (e) {
           const errorMessage = e instanceof Error ? e.message : 'Unknown error';
@@ -292,7 +297,8 @@ const { x, y } = this.computeCoordinates(popularity, genres);
     }
   }
 }
-// ── Spotify API types (minimal surface) ──────────────────────────────────────
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface SpotifyArtist {
   id: string;
@@ -308,12 +314,24 @@ interface SpotifyTopTracks {
     id: string;
     name: string;
     preview_url: string | null;
-    album: { images: { url: string }[] };
+    album: { name: string; images: { url: string }[] };
   }[];
 }
 
 interface SpotifySearchResult {
   artists: {
     items: SpotifyArtist[];
+  };
+}
+
+interface LastFmArtistResponse {
+  artist?: {
+    stats?: {
+      listeners?: string;
+      playcount?: string;
+    };
+    tags?: {
+      tag: { name: string }[];
+    };
   };
 }

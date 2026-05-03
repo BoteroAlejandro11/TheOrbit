@@ -7,11 +7,13 @@ import {
   UseGuards,
   Post,
   Body,
+  Param,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { MapService } from './map.service';
 import { SpotifyService } from '../spotify/spotify.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+
 
 @ApiTags('Map')
 @Controller('map')
@@ -21,13 +23,6 @@ export class MapController {
     private readonly spotifyService: SpotifyService,
   ) {}
 
-  /**
-   * Core spatial endpoint.
-   * GET /map/artists?x1=-100&y1=-100&x2=100&y2=100
-   *
-   * The NextJS canvas sends the current viewport's canvas-space bounding box.
-   * Returns up to `limit` artist documents within that box.
-   */
   @Get('artists')
   @ApiOperation({ summary: 'Get artists within a canvas bounding box' })
   @ApiQuery({ name: 'x1', type: Number, example: -200 })
@@ -49,55 +44,63 @@ export class MapController {
     return { artists, count: artists.length, bounds: { x1, y1, x2, y2 } };
   }
 
-  /** Stats endpoint for debugging / admin use. */
   @Get('stats')
   @ApiOperation({ summary: 'Map population stats' })
   async getStats() {
     return this.mapService.getStats();
   }
 
-  /**
-   * Seed endpoint — triggers a Spotify search and populates a region.
-   * Protected: only authenticated users can trigger seeding.
-   * In production you'd restrict this to admins.
-   *
-   * POST /map/seed  { "query": "indie folk", "limit": 20 }
-   */
+  @Get('artist/:id')
+@ApiOperation({ summary: 'Get artist by Spotify ID' })
+async getArtist(@Param('id') id: string) {
+  return this.mapService.getArtistById(id);
+}
+
   @Post('seed')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Seed artists from Spotify by genre/query' })
-  @ApiBody({ 
+  @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        query: { 
-          type: 'string', 
-          example: 'salsa', 
-          description: 'The genre or artist name to search for' 
+        query: {
+          type: 'string',
+          example: 'salsa',
+          description: 'The genre or artist name to search for',
         },
-        limit: { 
-          type: 'number', 
-          example: 20, 
-          description: 'Number of artists to fetch (optional)' 
-        }
+        limit: {
+          type: 'number',
+          example: 20,
+          description: 'Number of artists to fetch (optional)',
+        },
       },
-      required: ['query']
-    }
+      required: ['query'],
+    },
   })
   async seedArtists(@Body() body: { query: string; limit?: number }) {
     const artists = await this.spotifyService.searchAndSeed(body.query, body.limit ?? 20);
     return { seeded: artists.length, message: `Seeded ${artists.length} artists for query: "${body.query}"` };
   }
 
-  /**
-   * Seed by explicit Spotify Artist IDs.
-   * POST /map/seed-ids  { "ids": ["4Z8W4fkeB5StDbG9I7DHVr", ...] }
-   */
   @Post('seed-ids')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Seed specific artists by Spotify ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: { type: 'string' },
+          example: ['3TVXtAsR1Inumwj472S9r4', '1Xyo4u8uXC1ZmMpatF05PJ'],
+          description: 'List of Spotify Artist IDs to seed',
+        },
+      },
+      required: ['ids'],
+    },
+  })
   async seedById(@Body() body: { ids: string[] }) {
     await this.spotifyService.seedPopularArtists(body.ids);
     return { message: `Queued ${body.ids.length} artists for seeding` };
