@@ -1,11 +1,12 @@
 "use client";
- 
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { useState } from "react";
  
 export default function Navbar() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchValue, setSearchValue] = useState("");
+  const router = useRouter();
  
   return (
     <>
@@ -77,7 +78,7 @@ export default function Navbar() {
           <NavBtn icon="↓" label="APP" />
           <NavBtn label="INICIO" />
           <div style={styles.divider} />
-          <button style={styles.joinBtn}>ÚNETE</button>
+          <button style={styles.joinBtn} onClick ={() => router.push("/den")}>ÚNETE</button>
         </nav>
       </header>
     </>

@@ -1,15 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-
-interface Track {
-  id: string;
-  name: string;
-  preview_url: string | null;
-  album_art: string;
-  album_name: string;
-}
+import { useAudio, Track } from "../../components/AudioContext";
 
 interface Artist {
   _id: string;
@@ -25,75 +18,29 @@ interface Artist {
 export default function ArtistPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { playTrack, currentTrack } = useAudio();
   const [artist, setArtist] = useState<Artist | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const progressInterval = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetch(`http://localhost:3000/map/artist/${id}`)
       .then((r) => r.json())
       .then((data) => {
         setArtist(data);
-        if (data.topTracks?.length > 0) setCurrentTrack(data.topTracks[0]);
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, [id]);
 
-  function playTrack(track: Track) {
-    if (!track.preview_url) return;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      if (progressInterval.current) clearInterval(progressInterval.current);
-    }
-    const audio = new Audio(track.preview_url);
-    audioRef.current = audio;
-    audio.play();
-    setPlaying(true);
-    setCurrentTrack(track);
-    setProgress(0);
-    progressInterval.current = setInterval(() => {
-      setProgress((audio.currentTime / audio.duration) * 100 || 0);
-    }, 500);
-    audio.onended = () => {
-      setPlaying(false);
-      setProgress(0);
-      if (progressInterval.current) clearInterval(progressInterval.current);
-    };
+  function handlePlayTrack(track: Track) {
+    if (!artist) return;
+    // Pasa toda la lista del artista como queue
+    const queue = (artist.topTracks || []).map((t) => ({
+      ...t,
+      artistName: artist.name,
+    }));
+    playTrack({ ...track, artistName: artist.name }, queue);
   }
-
-  function togglePlay() {
-    if (!audioRef.current) return;
-    if (playing) {
-      audioRef.current.pause();
-      setPlaying(false);
-      if (progressInterval.current) clearInterval(progressInterval.current);
-    } else {
-      audioRef.current.play();
-      setPlaying(true);
-      progressInterval.current = setInterval(() => {
-        setProgress((audioRef.current!.currentTime / audioRef.current!.duration) * 100 || 0);
-      }, 500);
-    }
-  }
-
-  function skipTrack(dir: "prev" | "next") {
-    if (!artist || !currentTrack) return;
-    const idx = artist.topTracks.findIndex((t) => t.id === currentTrack.id);
-    const next = dir === "next" ? idx + 1 : idx - 1;
-    if (next >= 0 && next < artist.topTracks.length) playTrack(artist.topTracks[next]);
-  }
-
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-      if (progressInterval.current) clearInterval(progressInterval.current);
-    };
-  }, []);
 
   if (loading) return (
     <div style={{ background: "#0a0a0a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -112,7 +59,7 @@ export default function ArtistPage() {
   );
 
   return (
-    <div style={{ background: "#0a0a0a", minHeight: "100vh", fontFamily: "Geologica, sans-serif", color: "white", paddingBottom: "120px" }}>
+    <div style={{ background: "#0a0a0a", minHeight: "100vh", fontFamily: "Geologica, sans-serif", color: "white", paddingBottom: "100px" }}>
 
       {/* ── Header banner ── */}
       <div style={{ position: "relative", width: "100%", height: 220, overflow: "hidden" }}>
@@ -146,7 +93,6 @@ export default function ArtistPage() {
           </div>
         </div>
 
-        {/* Back button */}
         <button
           onClick={() => router.back()}
           style={{ position: "absolute", top: 16, left: 16, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 20, color: "white", padding: "6px 16px", cursor: "pointer", fontSize: 13 }}
@@ -154,7 +100,6 @@ export default function ArtistPage() {
           ← Volver
         </button>
 
-        {/* Spotify link */}
         <a
           href={`https://open.spotify.com/artist/${artist.spotify_id}`}
           target="_blank"
@@ -173,7 +118,7 @@ export default function ArtistPage() {
           {(artist.topTracks || []).map((track) => (
             <div
               key={track.id}
-              onClick={() => playTrack(track)}
+              onClick={() => handlePlayTrack(track)}
               style={{
                 cursor: track.preview_url ? "pointer" : "default",
                 opacity: track.preview_url ? 1 : 0.5,
@@ -206,44 +151,6 @@ export default function ArtistPage() {
           ))}
         </div>
       </div>
-
-      {/* ── Player bar ── */}
-      {currentTrack && (
-        <div style={{
-          position: "fixed", bottom: 0, left: 0, right: 0,
-          background: "rgba(10,10,10,0.95)", backdropFilter: "blur(12px)",
-          borderTop: "1px solid rgba(157,51,255,0.3)",
-          display: "flex", alignItems: "center", gap: 16, padding: "12px 24px", zIndex: 100,
-        }}>
-          <img src={currentTrack.album_art} alt={currentTrack.name} style={{ width: 52, height: 52, borderRadius: 6, objectFit: "cover" }} />
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentTrack.name}</p>
-            <p style={{ margin: 0, fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{artist.name}</p>
-          </div>
-
-          {/* Controls */}
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flex: 2 }}>
-            <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
-              <button onClick={() => skipTrack("prev")} style={{ background: "none", border: "none", color: "white", fontSize: 20, cursor: "pointer" }}>⏮</button>
-              <button
-                onClick={togglePlay}
-                disabled={!currentTrack.preview_url}
-                style={{ background: "#9d33ff", border: "none", borderRadius: "50%", width: 40, height: 40, color: "white", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-              >
-                {playing ? "⏸" : "▶"}
-              </button>
-              <button onClick={() => skipTrack("next")} style={{ background: "none", border: "none", color: "white", fontSize: 20, cursor: "pointer" }}>⏭</button>
-            </div>
-            <div style={{ width: "100%", maxWidth: 400, height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2 }}>
-              <div style={{ width: `${progress}%`, height: "100%", background: "#9d33ff", borderRadius: 2, transition: "width 0.5s linear" }} />
-            </div>
-          </div>
-
-          {!currentTrack.preview_url && (
-            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0 }}>Sin preview</p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

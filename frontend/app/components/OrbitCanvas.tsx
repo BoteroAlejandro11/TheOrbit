@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 interface Artist {
   _id: string;
@@ -24,7 +25,6 @@ function resolveOverlaps(artists: Artist[]): Map<string, { x: number; y: number 
     let moved = false;
 
     positions.forEach((pos, id) => {
-      // Logo repulsion
       const distLogo = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
       if (distLogo < logoRadius) {
         const angle = Math.atan2(pos.y, pos.x);
@@ -33,7 +33,6 @@ function resolveOverlaps(artists: Artist[]): Map<string, { x: number; y: number 
         moved = true;
       }
 
-      // Artist repulsion
       positions.forEach((other, otherId) => {
         if (otherId === id) return;
         const dx = pos.x - other.x;
@@ -62,6 +61,9 @@ export default function OrbitCanvas() {
   const artistsRef = useRef<Artist[]>([]);
   const imageCache = useRef<Record<string, HTMLImageElement>>({});
   const resolvedPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -69,7 +71,17 @@ export default function OrbitCanvas() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    // ── Recuperar cámara ──────────────────────────────────────
     const camara = { x: 0, y: 0, zoom: 1 };
+    try {
+      const saved = sessionStorage.getItem("orbit-camera");
+      if (saved) {
+        const p = JSON.parse(saved);
+        camara.x = p.x ?? 0;
+        camara.y = p.y ?? 0;
+        camara.zoom = p.zoom ?? 1;
+      }
+    } catch (_) {}
 
     // ── Resize ────────────────────────────────────────────────
     function resize() {
@@ -80,10 +92,9 @@ export default function OrbitCanvas() {
     window.addEventListener("resize", resize);
     resize();
 
-    // ── Fetch artists from backend ────────────────────────────
+    // ── Fetch artists ─────────────────────────────────────────
     async function fetchArtists(initial = false) {
       let x1, x2, y1, y2;
-
       if (initial) {
         x1 = -5000; x2 = 5000; y1 = -5000; y2 = 5000;
       } else {
@@ -102,8 +113,8 @@ export default function OrbitCanvas() {
         );
         const data = await res.json();
 
-        const newIds = (data.artists ?? []).map((a: Artist) => a._id).join(',');
-        const oldIds = artistsRef.current.map(a => a._id).join(',');
+        const newIds = (data.artists ?? []).map((a: Artist) => a._id).join(",");
+        const oldIds = artistsRef.current.map((a) => a._id).join(",");
 
         if (newIds !== oldIds) {
           artistsRef.current = data.artists ?? [];
@@ -143,7 +154,6 @@ export default function OrbitCanvas() {
         };
       }
 
-      // ── Center Hub ───────────────────────────────────────────
       const { sx: cx, sy: cy } = toScreen(0, 0);
 
       const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 200 * camara.zoom);
@@ -204,7 +214,6 @@ export default function OrbitCanvas() {
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // ── Artists ───────────────────────────────────────────
       artistsRef.current.forEach((artist) => {
         const pos = resolvedPositions.current.get(artist._id) ?? { x: artist.x, y: artist.y };
         const { sx, sy } = toScreen(pos.x, pos.y);
@@ -254,11 +263,7 @@ export default function OrbitCanvas() {
     let dragMoved = false;
     let prev = { x: 0, y: 0 };
 
-    function onMouseDown(e: MouseEvent) {
-      dragging = true;
-      dragMoved = false;
-      prev = { x: e.clientX, y: e.clientY };
-    }
+    function onMouseDown(e: MouseEvent) { dragging = true; dragMoved = false; prev = { x: e.clientX, y: e.clientY }; }
     function onMouseUp() { dragging = false; }
     function onMouseMove(e: MouseEvent) {
       if (!dragging) return;
@@ -286,21 +291,18 @@ export default function OrbitCanvas() {
       camara.zoom = Math.min(Math.max(camara.zoom * (e.deltaY < 0 ? 1.1 : 0.9), 0.1), 5);
     }
 
-    // ── Click to navigate ─────────────────────────────────────
+    // ── Click — router.push para NO destruir el AudioProvider ─
     function onCanvasClick(e: MouseEvent) {
-      if (dragMoved) return; // ignore clicks that were actually drags
+      if (dragMoved) return;
       if (!canvas) return;
 
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-
       const screenCX = canvas.width / 2;
       const screenCY = canvas.height / 2;
-
       const worldX = (mouseX - screenCX) / camara.zoom + camara.x;
       const worldY = (mouseY - screenCY) / camara.zoom + camara.y;
-
       const radius = 40;
 
       for (const artist of artistsRef.current) {
@@ -309,7 +311,8 @@ export default function OrbitCanvas() {
         const dy = worldY - pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist <= radius) {
-          window.location.href = `/artist/${artist.spotify_id}`;
+          try { sessionStorage.setItem("orbit-camera", JSON.stringify(camara)); } catch (_) {}
+          routerRef.current.push(`/artist/${artist.spotify_id}`);
           return;
         }
       }
@@ -325,6 +328,7 @@ export default function OrbitCanvas() {
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
+      try { sessionStorage.setItem("orbit-camera", JSON.stringify(camara)); } catch (_) {}
       cancelAnimationFrame(animFrameId);
       clearInterval(fetchInterval);
       window.removeEventListener("resize", resize);
