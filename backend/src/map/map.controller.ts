@@ -1,3 +1,4 @@
+// ── map.controller.ts ────────────────────────────────────────────────────────
 import {
   Controller,
   Get,
@@ -13,8 +14,8 @@ import {
 import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { MapService } from './map.service';
 import { SpotifyService } from '../spotify/spotify.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-
+import { RolesGuard } from '../auth/Roles.guard';
+import { Roles } from '../auth/Roles.decorator';
 
 @ApiTags('Map')
 @Controller('map')
@@ -51,38 +52,29 @@ export class MapController {
     return this.mapService.getStats();
   }
 
-  // En map.controller.ts
-@Get('artist/:id')
-@ApiOperation({ summary: 'Get artist by Spotify ID' })
-async getArtist(@Param('id') id: string) {
-  const artist = await this.mapService.getArtistById(id);
-  
-  if (!artist) {
-    throw new NotFoundException(`Artista con Spotify ID ${id} no encontrado`);
+  @Get('artist/:id')
+  @ApiOperation({ summary: 'Get artist by Spotify ID' })
+  async getArtist(@Param('id') id: string) {
+    const artist = await this.mapService.getArtistById(id);
+    if (!artist) {
+      throw new NotFoundException(`Artista con Spotify ID ${id} no encontrado`);
+    }
+    return artist;
   }
 
-  // Como usaste .lean(), 'artist' ya es un objeto puro de JS con sus 'topTracks'
-  return artist;
-}
+  // ── Solo ADMIN ────────────────────────────────────────────────────────────
 
   @Post('seed')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Seed artists from Spotify by genre/query' })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        query: {
-          type: 'string',
-          example: 'salsa',
-          description: 'The genre or artist name to search for',
-        },
-        limit: {
-          type: 'number',
-          example: 20,
-          description: 'Number of artists to fetch (optional)',
-        },
+        query: { type: 'string', example: 'salsa' },
+        limit: { type: 'number', example: 20 },
       },
       required: ['query'],
     },
@@ -93,7 +85,8 @@ async getArtist(@Param('id') id: string) {
   }
 
   @Post('seed-ids')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Seed specific artists by Spotify ID' })
   @ApiBody({
@@ -103,8 +96,7 @@ async getArtist(@Param('id') id: string) {
         ids: {
           type: 'array',
           items: { type: 'string' },
-          example: ['3TVXtAsR1Inumwj472S9r4', '1Xyo4u8uXC1ZmMpatF05PJ'],
-          description: 'List of Spotify Artist IDs to seed',
+          example: ['3TVXtAsR1Inumwj472S9r4'],
         },
       },
       required: ['ids'],
