@@ -20,6 +20,9 @@ export class Artist {
   @Prop({ required: true, unique: true, index: true })
   spotify_id!: string;
 
+  @Prop({ type: [{ id: String, name: String, preview_url: String, album_art: String, album_name: String }], default: [] })
+topTracks!: { id: string; name: string; preview_url: string | null; album_art: string; album_name: string }[];
+
   @Prop({ required: true })
   name!: string;
 

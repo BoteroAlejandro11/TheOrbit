@@ -8,6 +8,7 @@ import {
   Post,
   Body,
   Param,
+  NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { MapService } from './map.service';
@@ -50,10 +51,18 @@ export class MapController {
     return this.mapService.getStats();
   }
 
-  @Get('artist/:id')
+  // En map.controller.ts
+@Get('artist/:id')
 @ApiOperation({ summary: 'Get artist by Spotify ID' })
 async getArtist(@Param('id') id: string) {
-  return this.mapService.getArtistById(id);
+  const artist = await this.mapService.getArtistById(id);
+  
+  if (!artist) {
+    throw new NotFoundException(`Artista con Spotify ID ${id} no encontrado`);
+  }
+
+  // Como usaste .lean(), 'artist' ya es un objeto puro de JS con sus 'topTracks'
+  return artist;
 }
 
   @Post('seed')

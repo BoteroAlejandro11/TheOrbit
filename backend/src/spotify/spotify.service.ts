@@ -189,60 +189,61 @@ r = MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (1 - normalized);
   // ── Seeding ───────────────────────────────────────────────────────────────
 
   async fetchAndSeedArtist(spotifyId: string, artistName?: string): Promise<ArtistDocument> {
-    const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
-    const name = artistData.name ?? artistName ?? 'Unknown';
+  const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
+  const name = artistData.name ?? artistName ?? 'Unknown';
 
-    // Get rich metadata from Last.fm
-    const { listeners, tags } = await this.lastFmGetArtist(name);
+  // Obtener metadata de Last.fm
+  const { listeners, tags } = await this.lastFmGetArtist(name);
 
-    const genres = tags.length > 0 ? tags : [];
-    const { x, y } = this.computeCoordinates(genres, spotifyId, listeners);
+  const genres = tags.length > 0 ? tags : (artistData.genres || []);
+  const { x, y } = this.computeCoordinates(genres, spotifyId, listeners);
 
-    let topTracks: {
-  id: string;
-  name: string;
-  preview_url: string | null;
-  album_art: string;
-  album_name: string;
-}[] = [];
+  let topTracks: any[] = [];
 
-try {
-  const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
-    `/artists/${spotifyId}/top-tracks?market=US`,
-  );
-  topTracks = (topTracksData.tracks ?? []).slice(0, 10).map((t) => ({
-    id: t.id,
-    name: t.name,
-    preview_url: t.preview_url ?? null,
-    album_art: t.album?.images?.[0]?.url ?? '',
-    album_name: t.album?.name ?? '',
-  }));
-} catch (e) {
-  this.logger.warn(`Top tracks unavailable for ${name}`);
-}
+  try {
+    const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
+      `/artists/${spotifyId}/top-tracks?market=US`,
+    );
+    
+    // Mapeo riguroso de los campos para que coincidan con el esquema
+    topTracks = (topTracksData.tracks ?? []).slice(0, 10).map((t) => ({
+      id: t.id,
+      name: t.name,
+      preview_url: t.preview_url || null,
+      album_art: t.album?.images?.[0]?.url || '',
+      album_name: t.album?.name || '',
+    }));
 
-    const doc = await this.artistModel.findOneAndUpdate(
-  { spotify_id: spotifyId },
-  {
-    spotify_id: spotifyId,
-    name,
-    profile_image: artistData.images?.[0]?.url ?? null,
-    genres,
-    popularity: artistData.popularity ?? 0,
-    followers: listeners,
-    preview_url: topTracks[0]?.preview_url ?? null,
-    top_track_name: topTracks[0]?.name ?? null,
-    top_track_album_art: topTracks[0]?.album_art ?? null,
-    topTracks,
-    x,
-    y,
-  },
-  { upsert: true, new: true },
-);
-
-    this.logger.log(`Seeded: ${name} | listeners=${listeners} | genres=${genres.slice(0, 3).join(', ') || 'none'} | pos=(${x}, ${y})`);
-    return doc;
+    this.logger.log(`Fetched ${topTracks.length} tracks for ${name}`);
+  } catch (e) {
+    this.logger.warn(`Top tracks unavailable for ${name}`);
   }
+
+  // IMPORTANTE: Aseguramos que topTracks se incluya en el update
+  const doc = await this.artistModel.findOneAndUpdate(
+    { spotify_id: spotifyId },
+    {
+      spotify_id: spotifyId,
+      name,
+      profile_image: artistData.images?.[0]?.url ?? null,
+      genres,
+      popularity: artistData.popularity ?? 0,
+      followers: listeners,
+      // Mantenemos estos para compatibilidad, pero usamos topTracks para la página
+      preview_url: topTracks[0]?.preview_url ?? null,
+      top_track_name: topTracks[0]?.name ?? null,
+      top_track_album_art: topTracks[0]?.album_art ?? null,
+      // CAMPO CLAVE
+      topTracks: topTracks, 
+      x,
+      y,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }, // Forzar defaults si es nuevo
+  );
+
+  this.logger.log(`Seeded: ${name} | tracks=${topTracks.length} | pos=(${x}, ${y})`);
+  return doc;
+}
 
   async seedPopularArtists(ids: string[]): Promise<void> {
     this.logger.log(`Seeding ${ids.length} artists...`);

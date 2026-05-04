@@ -108,7 +108,7 @@ export default function ArtistPage() {
   );
 
   const uniqueAlbums = Array.from(
-    new Map(artist.topTracks.map((t) => [t.album_name, t])).values()
+    new Map((artist.topTracks || []).map((t) => [t.album_name, t])).values()
   );
 
   return (
@@ -170,7 +170,7 @@ export default function ArtistPage() {
         {/* ── Canciones ── */}
         <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 16, letterSpacing: 1 }}>CANCIONES</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 16, marginBottom: 40 }}>
-          {artist.topTracks.map((track) => (
+          {(artist.topTracks || []).map((track) => (
             <div
               key={track.id}
               onClick={() => playTrack(track)}
