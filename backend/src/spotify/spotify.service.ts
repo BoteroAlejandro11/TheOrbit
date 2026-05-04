@@ -11,27 +11,27 @@ export class SpotifyService implements OnModuleInit {
   private tokenExpiresAt = 0;
 
   private static computeGenreAngles(): Record<string, number> {
-  const genres = [
-    'pop', 'dance pop', 'k-pop', 'electropop',
-    'electronic', 'edm', 'house', 'techno',
-    'hip hop', 'rap', 'trap',
-    'r&b', 'soul', 'funk',
-    'jazz', 'blues',
-    'classical', 'ambient',
-    'folk', 'country', 'bluegrass',
-    'rock', 'indie rock', 'alternative', 'metal', 'punk',
-    'reggae', 'dancehall',
-    'latin', 'salsa', 'bachata', 'cumbia', 'reggaeton',
-  ];
+    const genres = [
+      'pop', 'dance pop', 'k-pop', 'electropop',
+      'electronic', 'edm', 'house', 'techno',
+      'hip hop', 'rap', 'trap',
+      'r&b', 'soul', 'funk',
+      'jazz', 'blues',
+      'classical', 'ambient',
+      'folk', 'country', 'bluegrass',
+      'rock', 'indie rock', 'alternative', 'metal', 'punk',
+      'reggae', 'dancehall',
+      'latin', 'salsa', 'bachata', 'cumbia', 'reggaeton',
+    ];
 
-  const result: Record<string, number> = {};
-  genres.forEach((g, i) => {
-    result[g] = (i / genres.length) * 2 * Math.PI;
-  });
-  return result;
-}
+    const result: Record<string, number> = {};
+    genres.forEach((g, i) => {
+      result[g] = (i / genres.length) * 2 * Math.PI;
+    });
+    return result;
+  }
 
-private static readonly GENRE_ANGLES = SpotifyService.computeGenreAngles();
+  private static readonly GENRE_ANGLES = SpotifyService.computeGenreAngles();
 
   constructor(
     private readonly config: ConfigService,
@@ -141,8 +141,8 @@ private static readonly GENRE_ANGLES = SpotifyService.computeGenreAngles();
       const maxLog = Math.log10(100_000_000);
       const logListeners = Math.log10(Math.max(listeners, 1));
       const normalized = Math.min(logListeners / maxLog, 1);
-      const MIN_RADIUS = 200; // was 150
-r = MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (1 - normalized);
+      const MIN_RADIUS = 200;
+      r = MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (1 - normalized);
     } else {
       let hash = 0;
       for (let i = 0; i < seed.length; i++) {
@@ -189,61 +189,78 @@ r = MIN_RADIUS + (MAX_RADIUS - MIN_RADIUS) * (1 - normalized);
   // ── Seeding ───────────────────────────────────────────────────────────────
 
   async fetchAndSeedArtist(spotifyId: string, artistName?: string): Promise<ArtistDocument> {
-  const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
-  const name = artistData.name ?? artistName ?? 'Unknown';
+    const artistData = await this.spotifyGet<SpotifyArtist>(`/artists/${spotifyId}`);
+    const name = artistData.name ?? artistName ?? 'Unknown';
 
-  // Obtener metadata de Last.fm
-  const { listeners, tags } = await this.lastFmGetArtist(name);
+    const { listeners, tags } = await this.lastFmGetArtist(name);
 
-  const genres = tags.length > 0 ? tags : (artistData.genres || []);
-  const { x, y } = this.computeCoordinates(genres, spotifyId, listeners);
+    const genres = tags.length > 0 ? tags : (artistData.genres || []);
+    const { x, y } = this.computeCoordinates(genres, spotifyId, listeners);
 
-  let topTracks: any[] = [];
+    let topTracks: Array<{
+      id: string;
+      name: string;
+      preview_url: string | null;
+      album_art: string;
+      album_name: string;
+    }> = [];
 
-  try {
-    const topTracksData = await this.spotifyGet<SpotifyTopTracks>(
-      `/artists/${spotifyId}/top-tracks?market=US`,
-    );
-    
-    // Mapeo riguroso de los campos para que coincidan con el esquema
-    topTracks = (topTracksData.tracks ?? []).slice(0, 10).map((t) => ({
-      id: t.id,
-      name: t.name,
-      preview_url: t.preview_url || null,
-      album_art: t.album?.images?.[0]?.url || '',
-      album_name: t.album?.name || '',
-    }));
-
-    this.logger.log(`Fetched ${topTracks.length} tracks for ${name}`);
-  } catch (e) {
-    this.logger.warn(`Top tracks unavailable for ${name}`);
-  }
-
-  // IMPORTANTE: Aseguramos que topTracks se incluya en el update
-  const doc = await this.artistModel.findOneAndUpdate(
-    { spotify_id: spotifyId },
-    {
-      spotify_id: spotifyId,
-      name,
-      profile_image: artistData.images?.[0]?.url ?? null,
-      genres,
-      popularity: artistData.popularity ?? 0,
-      followers: listeners,
-      // Mantenemos estos para compatibilidad, pero usamos topTracks para la página
-      preview_url: topTracks[0]?.preview_url ?? null,
-      top_track_name: topTracks[0]?.name ?? null,
-      top_track_album_art: topTracks[0]?.album_art ?? null,
-      // CAMPO CLAVE
-      topTracks: topTracks, 
-      x,
-      y,
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }, // Forzar defaults si es nuevo
+    try {
+  // Step 1: Find the artist's exact Deezer ID
+  const artistRes = await fetch(
+    `https://api.deezer.com/search/artist?q=${encodeURIComponent(name)}&limit=1`
   );
+  const artistData = await artistRes.json() as { data: { id: number; name: string }[] };
+  const deezerId = artistData.data?.[0]?.id;
 
-  this.logger.log(`Seeded: ${name} | tracks=${topTracks.length} | pos=(${x}, ${y})`);
-  return doc;
+  if (!deezerId) throw new Error('Artist not found on Deezer');
+
+  // Step 2: Fetch their top tracks directly by artist ID
+  const tracksRes = await fetch(
+    `https://api.deezer.com/artist/${deezerId}/top?limit=10`
+  );
+  const tracksData = await tracksRes.json() as DeezerSearchResult;
+
+  topTracks = (tracksData.data ?? []).slice(0, 10).map((t) => ({
+    id: String(t.id),
+    name: t.title,
+    preview_url: t.preview ?? null,
+    album_art: t.album?.cover_medium ?? t.album?.cover ?? '',
+    album_name: t.album?.title ?? '',
+  }));
+
+  this.logger.log(`Deezer: fetched ${topTracks.length} tracks for ${name}`);
+} catch (e) {
+  this.logger.error(`Deezer top tracks failed for ${name}: ${e}`);
 }
+
+    // ── FIX: Use $set so Mongoose properly overwrites arrays on existing docs ──
+    const updatePayload = {
+      $set: {
+        spotify_id: spotifyId,
+        name,
+        profile_image: artistData.images?.[0]?.url ?? null,
+        genres,
+        popularity: artistData.popularity ?? 0,
+        followers: listeners,
+        preview_url: topTracks[0]?.preview_url ?? null,
+        top_track_name: topTracks[0]?.name ?? null,
+        top_track_album_art: topTracks[0]?.album_art ?? null,
+        topTracks,   // ← array is replaced atomically via $set
+        x,
+        y,
+      },
+    };
+
+    const doc = await this.artistModel.findOneAndUpdate(
+      { spotify_id: spotifyId },
+      updatePayload,
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+    this.logger.log(`Seeded: ${name} | tracks=${topTracks.length} | pos=(${x}, ${y})`);
+    return doc;
+  }
 
   async seedPopularArtists(ids: string[]): Promise<void> {
     this.logger.log(`Seeding ${ids.length} artists...`);
@@ -335,4 +352,17 @@ interface LastFmArtistResponse {
       tag: { name: string }[];
     };
   };
+}
+
+interface DeezerSearchResult {
+  data: {
+    id: number;
+    title: string;
+    preview: string;
+    album: {
+      title: string;
+      cover: string;
+      cover_medium: string;
+    };
+  }[];
 }

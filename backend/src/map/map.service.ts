@@ -109,7 +109,9 @@ export class MapService {
     return { total, topGenres: byGenre };
   }
 
-  async getArtistById(spotifyId: string): Promise<ArtistDocument | null> {
-  return this.artistModel.findOne({ spotify_id: spotifyId }).lean() as Promise<ArtistDocument | null>;
+  // En map.service.ts
+async getArtistById(spotifyId: string): Promise<any | null> {
+  // .lean() es perfecto aquí para que el JSON sea ligero y fácil de leer por Next.js
+  return this.artistModel.findOne({ spotify_id: spotifyId }).lean().exec();
 }
 }

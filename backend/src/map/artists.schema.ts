@@ -3,6 +3,17 @@ import { Document } from 'mongoose';
 
 export type ArtistDocument = Artist & Document;
 
+// ── Track subdocument ─────────────────────────────────────────────────────────
+@Schema({ _id: false })
+class Track {
+  @Prop({ required: true }) id!: string;
+  @Prop({ required: true }) name!: string;
+  @Prop({ type: String, default: null }) preview_url!: string | null;
+  @Prop({ default: '' })    album_art!: string;
+  @Prop({ default: '' })    album_name!: string;
+}
+const TrackSchema = SchemaFactory.createForClass(Track);
+
 /**
  * The Artist schema stores Spotify metadata plus computed (x, y) coordinates.
  *
@@ -20,8 +31,9 @@ export class Artist {
   @Prop({ required: true, unique: true, index: true })
   spotify_id!: string;
 
-  @Prop({ type: [{ id: String, name: String, preview_url: String, album_art: String, album_name: String }], default: [] })
-topTracks!: { id: string; name: string; preview_url: string | null; album_art: string; album_name: string }[];
+  // Properly typed subdocument array so Mongoose tracks changes correctly
+  @Prop({ type: [TrackSchema], default: [] })
+  topTracks!: Track[];
 
   @Prop({ required: true })
   name!: string;
@@ -44,9 +56,9 @@ topTracks!: { id: string; name: string; preview_url: string | null; album_art: s
   @Prop({ default: false })
   is_verified!: boolean;
 
-  // ── Top track preview ─────────────────────────────────────────────────
+  // ── Top track preview (legacy, kept for compatibility) ────────────────
   @Prop()
-  preview_url!: string;       // 30-second clip from Spotify
+  preview_url!: string;
 
   @Prop()
   top_track_name!: string;
@@ -55,19 +67,11 @@ topTracks!: { id: string; name: string; preview_url: string | null; album_art: s
   top_track_album_art!: string;
 
   // ── Spatial coordinates ───────────────────────────────────────────────
-  /** Flat Cartesian x coordinate (derived from popularity + genre angle). */
   @Prop({ required: true })
   x!: number;
 
-  /** Flat Cartesian y coordinate (derived from popularity + genre angle). */
   @Prop({ required: true })
   y!: number;
-
-  /**
-   * GeoJSON Point for MongoDB 2dsphere index.
-   * coordinates: [longitude = x, latitude = y]
-   * We treat our canvas space as if it were a geographic plane.
-   */
 }
 
 export const ArtistSchema = SchemaFactory.createForClass(Artist);
