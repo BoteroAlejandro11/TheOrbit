@@ -288,8 +288,8 @@ export default function OrbitCanvas() {
         y2 = 5000;
       } else {
         const pad = 1000;
-        const halfW = canvas.width / 2 / camara.zoom;
-        const halfH = canvas.height / 2 / camara.zoom;
+        const halfW = canvas!.width / 2 / camara.zoom;
+        const halfH = canvas!.height / 2 / camara.zoom;
 
         x1 = camara.x - halfW - pad;
         x2 = camara.x + halfW + pad;
