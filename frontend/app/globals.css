@@ -6,9 +6,20 @@
   box-sizing: border-box;
 }
 
-body, html {
+html,
+body {
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
   background-color: #0d001a;
+  font-family: "Geologica", sans-serif;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+button,
+input,
+a {
+  font-family: inherit;
 }
