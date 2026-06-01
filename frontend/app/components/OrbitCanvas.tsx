@@ -266,9 +266,17 @@ export default function OrbitCanvas() {
       }
 
       try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+
         const res = await fetch(
-          `http://localhost:3000/map/artists?x1=${x1}&y1=${y1}&x2=${x2}&y2=${y2}&limit=200`
-        );
+         `${API_URL}/map/artists?x1=${x1}&y1=${y1}&x2=${x2}&y2=${y2}&limit=200`
+);
+
+         if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Error ${res.status} al pedir artistas: ${text.slice(0, 120)}`);
+}
+
         const data = await res.json();
 
         const newIds = (data.artists ?? []).map((a: Artist) => a._id).join(",");
