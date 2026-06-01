@@ -15,6 +15,8 @@ interface Artist {
   topTracks: Track[];
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+
 export default function ArtistPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -23,13 +25,36 @@ export default function ArtistPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://localhost:3000/map/artist/${id}`)
-      .then((r) => r.json())
-      .then((data) => {
-        setArtist(data);
+    async function loadArtist() {
+      if (!id) {
+        setArtist(null);
         setLoading(false);
-      })
-      .catch(() => setLoading(false));
+        return;
+      }
+
+      try {
+        setLoading(true);
+
+        const res = await fetch(`${API_URL}/map/artist/${encodeURIComponent(id)}`);
+
+        if (!res.ok) {
+          setArtist(null);
+          return;
+        }
+
+        const data = await res.json();
+
+        // El backend devuelve el artista directamente, no dentro de data.artist.
+        setArtist(data);
+      } catch (error) {
+        console.error("Error cargando artista:", error);
+        setArtist(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadArtist();
   }, [id]);
 
   function handlePlayTrack(track: Track) {
