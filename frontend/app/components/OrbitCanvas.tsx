@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 interface Artist {
@@ -205,38 +205,6 @@ function resolveComputedOverlaps(
 
   return positions;
 }
-
-const legendLineStyle: CSSProperties = {
-  margin: "8px 0",
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  fontSize: 12,
-  color: "rgba(255,255,255,0.68)",
-};
-
-const legendDotStyle: CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: "50%",
-  background: "#9d33ff",
-  flexShrink: 0,
-};
-
-const legendCircleStyle: CSSProperties = {
-  width: 15,
-  height: 15,
-  borderRadius: "50%",
-  border: "1.5px solid #9d33ff",
-  flexShrink: 0,
-};
-
-const legendLineIconStyle: CSSProperties = {
-  width: 18,
-  height: 1.5,
-  background: "rgba(157, 51, 255, 0.65)",
-  flexShrink: 0,
-};
 
 export default function OrbitCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -586,66 +554,18 @@ export default function OrbitCanvas() {
   }, []);
 
   return (
-    <>
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100vw",
-          height: "100vh",
-          background: "#0a0a0a",
-          cursor: "grab",
-          display: "block",
-        }}
-      />
-
-      <div
-        style={{
-          position: "fixed",
-          right: 28,
-          bottom: 28,
-          width: 285,
-          padding: "16px 18px",
-          borderRadius: 16,
-          background: "rgba(13, 0, 26, 0.76)",
-          border: "1px solid rgba(157, 51, 255, 0.28)",
-          boxShadow: "0 0 24px rgba(157, 51, 255, 0.18)",
-          backdropFilter: "blur(14px)",
-          zIndex: 120,
-          color: "white",
-          fontFamily: "'Geologica', sans-serif",
-          pointerEvents: "none",
-        }}
-      >
-        <p
-          style={{
-            margin: "0 0 12px",
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 1,
-            color: "rgba(255,255,255,0.85)",
-          }}
-        >
-          CÓMO LEER THE ORBIT
-        </p>
-
-        <p style={legendLineStyle}>
-          <span style={legendDotStyle} />
-          Dirección = género musical
-        </p>
-
-        <p style={legendLineStyle}>
-          <span style={legendCircleStyle} />
-          Tamaño = relevancia del artista
-        </p>
-
-        <p style={legendLineStyle}>
-          <span style={legendLineIconStyle} />
-          Centro = mayor tendencia
-        </p>
-      </div>
-    </>
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        background: "#0a0a0a",
+        cursor: "grab",
+        display: "block",
+      }}
+    />
   );
 }
